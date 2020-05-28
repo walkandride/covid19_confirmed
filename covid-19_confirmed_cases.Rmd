@@ -1,0 +1,619 @@
+---
+title: "COVID-19:  Confirmed Cases And Testing Explored"
+author: "John Sinues"
+output: html_notebook
+---
+
+
+```{r clearall, echo=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+rm(list = ls())
+```
+
+```{r init, echo=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+library(tidyverse)
+library(lubridate)
+library(ggthemes)
+library(knitr)
+library(kableExtra)
+library(formattable)
+
+options(scipen=10000) # remove scientific notation from graphs
+```
+
+
+# Introduction
+In my previous [report](https://rpubs.com/walkandride/595987), I went into detail about the COVID-19 curve.  Probably a bit to much detail for most people.  
+
+We are now entering a new phase on the COVID timeline.  News about [states re-opening](https://www.mercurynews.com/2020/04/24/coronavirus-this-is-where-all-50-states-stand-on-reopening/) now top the headlines.  It's a good time for me to pivot.
+
+**When is a good time for a state to reopen when there is no known cure for COVID-19?**  The document *[When and How to Reopen After COVID-19](https://preventepidemics.org/wp-content/uploads/2020/04/COV020_WhenHowLoosenFaucet_v4.pdf)* provides guidelines from three different perspectives.  
+
+In this analysis I explore three factors based upon data on confirmed cases and data available on COVID testing.  Specifically, I'm looking at:
+
+1.  a downward trend of confirmed cases in the last two weeks
+2.  a [data quality grade](https://covidtracking.com/about-data#state-data-quality-grades) from [The COVID Tracking Project](https://covidtracking.com)
+3.  the [positive rate in tests benchmark](https://www.npr.org/2020/04/23/842195504/morning-news-brief) (positivity rate) as defined by the World Health Organization (*the more tests that come back positive, the less likely a state is doing enough testing*).  
+
+### Make An Informed Decision
+
+Here's how.
+
+1.  Find the state you're interested in.
+2.  Look at the graphs.  The first graph show the number of confirmed cases for the area since its inception.  The second graph shows the confirmed cases for the last 14 days.  What is its trend?  Is the line sloping downwards?  (Note:  the actual numbers are found in the table above the graphs.)
+3.  In the *Testing Results* table, locate the area state abbreviation.  What is it's grade?  What is its posRate value?
+4.  Now evaluate:
+    a)  Are the number of confirmed cases trending downward?  Two trend lines are provided to better visualize the trend over the last two weeks.
+    b)  Does the COVID Tracking Project give a data quality grade of A or above?
+    c)  Is the positive rate of tests as defined by the WHO less than 10%?
+    d)  Those values in the table that meet or exceed minimum recommended requirements are <span style="color:green">**green**</span>; those slightly above the threshold are <span style="color:orange">**orange**</span>.
+
+> May 7, 2020:  [CDC reopening guidelines in three phases](https://www.mercurynews.com/2020/05/07/read-full-text-of-cdc-reopening-guidelines-that-white-house-rejected/)
+
+> May 13, 2020:  [How We Reopen Safely](https://www.covidexitstrategy.org/)
+
+> May 21, 2020:  [As of May 20, all 50 states were at least partially reopened.  At least 4 states may have skewed numbers:  Virginia, Texas, Georgia, and Vermont](https://www.chron.com/news/article/National-coronavirus-updates-At-least-4-states-15285351.php)
+
+### Let's get started.
+
+```{r get_files, cache=TRUE, echo=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+filename <- "nssac-ncov-data-country-state"
+src_file <- paste0("https://nssac.bii.virginia.edu/covid-19/dashboard/data/"
+                   , filename
+                   , ".zip")
+
+# Make a temporary file (tf) and a temporary folder (tdir)
+tf <- tempfile(tmpdir = tdir <- tempdir())
+
+## Download the zip file 
+download.file(src_file, tf)
+
+## Unzip it in the temp folder
+csv_files <- unzip(tf, exdir = tdir)
+
+files_to_import <- list.files(paste0(tdir,"/", filename), pattern = ".csv", full.names = TRUE)
+
+
+# apply map_df() to iterate read_csv over files
+data <- files_to_import %>% map_dfr(read_csv, col_types = "ccciii")
+colnames(data) <- c("Name", "Region", "Last_Update", "Confirmed", "Deaths", "Recovered")
+data$Last_Update <- ymd_hms(data$Last_Update)
+
+```
+
+```{r get_covid_test, cache=TRUE, echo=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+tracking <- read_csv("https://covidtracking.com/api/v1/states/current.csv")
+
+```
+
+
+```{r data_prep, echo=FALSE, warning=FALSE, message=FALSE, results=FALSE}
+# calculate case  type change from previous day
+data <- data %>% group_by(Name, Region) %>%
+  arrange(Region, Name, Last_Update) %>%
+  mutate(delta_confirmed = Confirmed - lag(Confirmed)) %>%
+  mutate(delta_deaths = Deaths - lag(Deaths)) %>%
+  mutate(delta_recovered = Recovered - lag(Recovered))
+
+# shorten name
+data$Name[data$Name == "United States Virgin Islands"] <- "US Virgin Islands"
+
+min_dt <- min(data$Last_Update, na.rm=TRUE)
+max_dt <- max(data$Last_Update, na.rm=TRUE)
+
+```
+
+```{r, echo = FALSE}
+formatNum <- function(num) {
+  if (!is.na(num)) {
+    f <- prettyNum(num, big.mark=",", preserve.width="none")
+  } else {
+    f <- 'No'
+  }
+    
+  f
+}
+
+```
+
+The first datafile from the [University of Virginia](https://nssac.github.io/covid-19/dashboard/#faq) provides information about the confirmed cases.  It contains **`r formatNum(nrow(data))`** records, **`r length(unique(data$Region))`** areas of interests (AOI's) with information dated from **`r min_dt[[1]]`** and **`r max_dt[[1]]`**.
+
+Globally, there are **`r formatNum(sum(data %>%  slice(c(1:n())-1) %>% ungroup() %>% select(delta_confirmed), na.rm=TRUE))`** confirmed COVID-19 cases, **`r formatNum(sum(data %>%  slice(c(1:n())-1) %>% ungroup() %>% select(delta_deaths), na.rm=TRUE))`** deaths, and **`r formatNum(sum(data %>%  slice(c(1:n())-1) %>% ungroup() %>% select(delta_recovered), na.rm=TRUE))`** who recovered.
+
+The second datafile from [The COVID Tracking Project](https://covidtracking.com) provides information about testing and the *data-quality grade*.  It contains **`r formatNum(nrow(tracking))`** AOI's.  From it, we learn the following:
+
+* `r formatNum(sum(tracking$totalTestResults, na.rm = TRUE))` tests performed as of `r max(tracking$dateModified)`
+* `r formatNum(sum(tracking$positive, na.rm = TRUE))` tests returned postive
+* `r formatNum(sum(tracking$negative, na.rm = TRUE))` tests returned negative
+* `r formatNum(sum(tracking$death, na.rm=TRUE))` deaths in the US states and territories
+* `r formatNum(nrow(tracking %>% filter(dataQualityGrade == "A+")))` areas have a grade of A+
+* `r formatNum(nrow(tracking %>% filter(dataQualityGrade == "A")))` areas have a grade of A
+* `r formatNum(nrow(tracking %>% filter(dataQualityGrade == "B")))` areas have a grade of B
+* `r formatNum(nrow(tracking %>% filter(dataQualityGrade == "C")))` areas have a grade of C
+* `r formatNum(nrow(tracking %>% filter(dataQualityGrade == "D")))` areas have a grade of D
+* `r formatNum(nrow(tracking %>% filter(dataQualityGrade == "F")))` areas have a grade of F
+* `r formatNum(nrow(tracking %>% filter(is.na(dataQualityGrade))))` areas have no grade
+
+### Analysis By Region
+
+```{r, echo = FALSE}
+Northeast <- c("Connecticut", "Maine", "Massachusetts", "New Hampshire", "Rhode Island"
+               , "Vermont", "New Jersey", "New York", "Pennsylvania", "Puerto Rico"
+               , "US Virgin Islands")
+Midwest <- c("Illinois", "Indiana", "Michigan", "Ohio", "Wisconsin"
+             , "Iowa", "Kansas", "Minnesota", "Missouri", "Nebraska"
+             , "North Dakota", "South Dakota")
+South <- c("Delaware", "Florida", "Georgia", "Maryland", "North Carolina"
+           , "South Carolina", "Virginia", "District of Columbia", "West Virginia", "Alabama"
+           , "Kentucky", "Mississippi", "Tennessee", "Arkansas", "Louisiana"
+           , "Oklahoma", "Texas")
+West <- c("Arizona", "Colorado", "Idaho", "Montana", "Nevada"
+          , "New Mexico", "Utah", "Wyoming", "Alaska", "California"
+          , "Hawaii", "Oregon", "Washington", "Guam")
+
+getAIO_start_idx <- function(df, name) {
+  df %>% filter(Name == name) %>% slice(1) %>% pull(row_num)
+}
+
+getAIO_end_idx <- function(df, name) {
+  df %>% filter(Name == name) %>% slice(n()) %>% pull(row_num)
+}
+
+```
+
+```{r, echo = FALSE}
+plotRegions <- function(theData, plotLog, reportTitle, facetWrap, trend=NULL) {
+  p <- ggplot(theData,
+              aes(x=Date, y=Change)) + 
+    geom_point() +
+    labs(title = reportTitle
+         , x = "Date Reported"
+         , y = "# Cases"
+         , caption = paste0("Created ", Sys.time())) +
+    scale_color_fivethirtyeight() + 
+    theme_fivethirtyeight() +
+    theme(axis.text.x = element_text(angle=90))
+
+  if (missing(trend)) {
+    p <- p + stat_smooth()  
+  } else {
+    p <- p + stat_smooth() + 
+      stat_smooth(method = 'lm', aes(colour = 'linear'), se = FALSE) +
+      stat_smooth(method = 'lm', formula =y ~ poly(x, 2), aes(colour = 'polynomial'), se = FALSE) +
+      labs(color = "Smoothing Function")
+  }
+
+  if (facetWrap == "Y") {
+    p <- p + facet_wrap(vars(Name), scales = "free")
+  }
+  
+  if (grepl(pattern="^log[0-9]{1,2}$", plotLog)) {
+    p <- p + scale_y_continuous(trans=plotLog)
+  }
+
+  p
+}
+
+```
+
+```{r, echo=FALSE, results = 'asis'}
+showTracking <- function(region, regionName) {
+  f <- state.abb[match(region, state.name)]
+  if (regionName == "South") {
+    f <- append(f, "DC")
+  } else if (regionName == "West") {
+    f <- append(f, "GU")
+  } else if (regionName == "Northeast") {
+    f <- append(f, "VI")
+    f <- append(f, "PR")
+  }
+  
+  t1 <- tracking %>% 
+    filter(state %in% c(f)) %>%
+    mutate(posRate = round(positive / totalTestResults * 100, 2)) %>%
+    select(state, positive, positiveScore, negative, negativeScore, negativeRegularScore, commercialScore, score, dataQualityGrade, posRate, death, totalTestResults, dateModified) %>%
+    rename(State=state
+           , LastUpdated=dateModified) %>%
+    mutate(
+      dataQualityGrade = ifelse(dataQualityGrade %in% c("A+", "A")
+                     , cell_spec(dataQualityGrade, color = "green", bold = T)
+                     , dataQualityGrade
+                     )
+      , posRate = ifelse(posRate <= 10
+                     , cell_spec(posRate, color = "green", bold = T)
+                     , ifelse(posRate > 10 & posRate <= 20
+                              , cell_spec(posRate, color = "orange", bold = T)
+                              , posRate)
+                     )
+      , positive = formatNum(positive)
+      , negative = formatNum(negative)
+      , death = formatNum(death)
+      , totalTestResults = formatNum(totalTestResults)
+    )
+
+  kable(t1
+        , escape = F
+        , caption = paste0("Testing Results ", regionName, " Region")
+        , align = c("lrcrcccccrrrl")) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+    footnote(general = "Column definitions"
+             , number = c("state: state or territory postal code abbreviation"
+                          , "positive: total cumulative positive test results"
+                          , "positiveScore: +1 for reporting positive reliably"
+                          , "negative: total cumulative negative test results"
+                          , "negativeScore: +1 for reporting negatives sometimes"
+                          , "negativeRegularScore: +1 for reporting negatives reliably"
+                          , "commercialScore: +1 for reporting all commercial tests"
+                          , "score: total reporting quality score"
+                          , "dataQualityGrade: letter grade based on state grading"
+                          , "posRate: WHO benchmark that tell if states are doing enough testing (positive/totalTestResults * 100)"
+                          , "death: total cumulatve number of people that have died"
+                          , "totalTestResults: calculated values (positive + negative) for total test results"
+                          , "dateModified: data last updated by state"
+                          )
+             )
+
+}
+```
+
+
+#### Northeast
+```{r, echo = FALSE}
+myDF <- data %>%
+            filter(Name %in% c(Northeast)) %>%
+            group_by(Region, Name) %>%
+            arrange(Region, Name, Last_Update) %>%
+            slice(c(1:n()-1)) %>%
+            ungroup() %>%
+            select(Name, Last_Update, Confirmed, delta_confirmed) %>%
+            arrange(Name, Last_Update) %>%
+            rename(Date=Last_Update, Change=delta_confirmed)
+
+myDF$row_num <- seq.int(nrow(myDF))  
+
+kable(myDF %>% select(Date, Confirmed, Change)
+      , caption = "Confirmed Cases Trend For Northeast Region") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F) %>%
+  pack_rows("Connecticut"
+            , getAIO_start_idx(myDF, "Connecticut")
+            , getAIO_end_idx(myDF, "Connecticut")
+            ) %>%
+  pack_rows("Maine"
+            , getAIO_start_idx(myDF, "Maine")
+            , getAIO_end_idx(myDF, "Maine")
+            ) %>%
+  pack_rows("Massachusetts"
+            , getAIO_start_idx(myDF, "Massachusetts")
+            , getAIO_end_idx(myDF, "Massachusetts")
+            ) %>%
+  pack_rows("New Hampshire"
+            , getAIO_start_idx(myDF, "New Hampshire")
+            , getAIO_end_idx(myDF, "New Hampshire")
+            ) %>%
+  pack_rows("Rhode Island"
+            , getAIO_start_idx(myDF, "Rhode Island")
+            , getAIO_end_idx(myDF, "Rhode Island")
+            ) %>%
+  pack_rows("Vermont"
+            , getAIO_start_idx(myDF, "Vermont")
+            , getAIO_end_idx(myDF, "Vermont")
+            ) %>%
+  pack_rows("New Jersey"
+            , getAIO_start_idx(myDF, "New Jersey")
+            , getAIO_end_idx(myDF, "New Jersey")
+            ) %>%
+  pack_rows("New York"
+            , getAIO_start_idx(myDF, "New York")
+            , getAIO_end_idx(myDF, "New York")
+            ) %>%
+  pack_rows("Pennsylvania"
+            , getAIO_start_idx(myDF, "Pennsylvania")
+            , getAIO_end_idx(myDF, "Pennsylvania")
+            ) %>%
+  pack_rows("Puerto Rico"
+            , getAIO_start_idx(myDF, "Puerto Rico")
+            , getAIO_end_idx(myDF, "Puerto Rico")
+            ) %>%
+  pack_rows("US Virgin Islands"
+            , getAIO_start_idx(myDF, "US Virgin Islands")
+            , getAIO_end_idx(myDF, "US Virgin Islands")
+            ) %>%
+  scroll_box(height = "400px")
+
+```
+\  
+\  
+
+```{r, cache=TRUE, echo = FALSE, warning=FALSE, message=FALSE, fig.align='center', fig.width=10, fig.height=8}
+  plotRegions(myDF, "Y", "COVID-19 Cases - Northest Region", "Y")
+  plotRegions(myDF %>%
+                group_by(Name) %>%
+                slice(tail(row_number(), 14)), "Y", "COVID-19 Cases - Northest Region (Last 14 Days)", "Y", "comp")
+  showTracking(Northeast, "Northeast")
+
+```
+
+#### Midwest
+```{r, echo = FALSE}
+myDF <- data %>%
+            filter(Name %in% c(Midwest)) %>%
+            group_by(Region, Name) %>%
+            arrange(Region, Name, Last_Update) %>%
+            slice(c(1:n()-1)) %>%
+            ungroup() %>%
+            select(Name, Last_Update, Confirmed, delta_confirmed) %>%
+            arrange(Name, Last_Update) %>%
+            rename(Date=Last_Update, Change=delta_confirmed)
+
+myDF$row_num <- seq.int(nrow(myDF))  
+
+kable(myDF %>% select(Date, Confirmed, Change)
+      , caption = "Confirmed Cases Trend For Midwest Region") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F) %>%
+  pack_rows("Illinois"
+            , getAIO_start_idx(myDF, "Illinois")
+            , getAIO_end_idx(myDF, "Illinois")
+            ) %>%
+  pack_rows("Indiana"
+            , getAIO_start_idx(myDF, "Indiana")
+            , getAIO_end_idx(myDF, "Indiana")
+            ) %>%
+  pack_rows("Michigan"
+            , getAIO_start_idx(myDF, "Michigan")
+            , getAIO_end_idx(myDF, "Michigan")
+            ) %>%
+  pack_rows("Ohio"
+            , getAIO_start_idx(myDF, "Ohio")
+            , getAIO_end_idx(myDF, "Ohio")
+            ) %>%
+  pack_rows("Wisconsin"
+            , getAIO_start_idx(myDF, "Wisconsin")
+            , getAIO_end_idx(myDF, "Wisconsin")
+            ) %>%
+  pack_rows("Iowa"
+            , getAIO_start_idx(myDF, "Iowa")
+            , getAIO_end_idx(myDF, "Iowa")
+            ) %>%
+  pack_rows("Kansas"
+            , getAIO_start_idx(myDF, "Kansas")
+            , getAIO_end_idx(myDF, "Kansas")
+            ) %>%
+  pack_rows("Minnesota"
+            , getAIO_start_idx(myDF, "Minnesota")
+            , getAIO_end_idx(myDF, "Minnesota")
+            ) %>%
+  pack_rows("Missouri"
+            , getAIO_start_idx(myDF, "Missouri")
+            , getAIO_end_idx(myDF, "Missouri")
+            ) %>%
+  pack_rows("Nebraska"
+            , getAIO_start_idx(myDF, "Nebraska")
+            , getAIO_end_idx(myDF, "Nebraska")
+            ) %>%
+  pack_rows("North Dakota"
+            , getAIO_start_idx(myDF, "North Dakota")
+            , getAIO_end_idx(myDF, "North Dakota")
+            ) %>%
+  pack_rows("South Dakota"
+            , getAIO_start_idx(myDF, "South Dakota")
+            , getAIO_end_idx(myDF, "South Dakota")
+            ) %>%
+  scroll_box(height = "400px")
+
+```
+\  
+\  
+
+```{r, cache=TRUE, echo = FALSE, warning=FALSE, message=FALSE, fig.align='center', fig.width=10, fig.height=8}
+  plotRegions(myDF, "Y", "COVID-19 Cases - Midwest Region", "Y")
+  plotRegions(myDF %>%
+                group_by(Name) %>%
+                slice(tail(row_number(), 14)), "Y", "COVID-19 Cases - Midwest Region (Last 14 Days)", "Y", "comp")
+  showTracking(Midwest, "Midwest")
+
+```
+
+#### South
+```{r, echo = FALSE}
+myDF <- data %>%
+            filter(Name %in% c(South)) %>%
+            group_by(Region, Name) %>%
+            arrange(Region, Name, Last_Update) %>%
+            slice(c(1:n()-1)) %>%
+            ungroup() %>%
+            select(Name, Last_Update, Confirmed, delta_confirmed) %>%
+            arrange(Name, Last_Update) %>%
+            rename(Date=Last_Update, Change=delta_confirmed)
+
+myDF$row_num <- seq.int(nrow(myDF))  
+
+kable(myDF %>% select(Date, Confirmed, Change)
+      , caption = "Confirmed Cases Trend For South Region") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F) %>%
+  pack_rows("Delaware"
+            , getAIO_start_idx(myDF, "Delaware")
+            , getAIO_end_idx(myDF, "Delaware")
+            ) %>%
+  pack_rows("Florida"
+            , getAIO_start_idx(myDF, "Florida")
+            , getAIO_end_idx(myDF, "Florida")
+            ) %>%
+  pack_rows("Georgia"
+            , getAIO_start_idx(myDF, "Georgia")
+            , getAIO_end_idx(myDF, "Georgia")
+            ) %>%
+  pack_rows("Maryland"
+            , getAIO_start_idx(myDF, "Maryland")
+            , getAIO_end_idx(myDF, "Maryland")
+            ) %>%
+  pack_rows("North Carolina"
+            , getAIO_start_idx(myDF, "North Carolina")
+            , getAIO_end_idx(myDF, "North Carolina")
+            ) %>%
+  pack_rows("South Carolina"
+            , getAIO_start_idx(myDF, "South Carolina")
+            , getAIO_end_idx(myDF, "South Carolina")
+            ) %>%
+  pack_rows("Virginia"
+            , getAIO_start_idx(myDF, "Virginia")
+            , getAIO_end_idx(myDF, "Virginia")
+            ) %>%
+  pack_rows("District of Columbia"
+            , getAIO_start_idx(myDF, "District of Columbia")
+            , getAIO_end_idx(myDF, "District of Columbia")
+            ) %>%
+  pack_rows("West Virginia"
+            , getAIO_start_idx(myDF, "West Virginia")
+            , getAIO_end_idx(myDF, "West Virginia")
+            ) %>%
+  pack_rows("Alabama"
+            , getAIO_start_idx(myDF, "Alabama")
+            , getAIO_end_idx(myDF, "Alabama")
+            ) %>%
+  pack_rows("Kentucky"
+            , getAIO_start_idx(myDF, "Kentucky")
+            , getAIO_end_idx(myDF, "Kentucky")
+            ) %>%
+  pack_rows("Mississippi"
+            , getAIO_start_idx(myDF, "Mississippi")
+            , getAIO_end_idx(myDF, "Mississippi")
+            ) %>%
+  pack_rows("Tennessee"
+            , getAIO_start_idx(myDF, "Tennessee")
+            , getAIO_end_idx(myDF, "Tennessee")
+            ) %>%
+  pack_rows("Arkansas"
+            , getAIO_start_idx(myDF, "Arkansas")
+            , getAIO_end_idx(myDF, "Arkansas")
+            ) %>%
+  pack_rows("Louisiana"
+            , getAIO_start_idx(myDF, "Louisiana")
+            , getAIO_end_idx(myDF, "Louisiana")
+            ) %>%
+  pack_rows("Oklahoma"
+            , getAIO_start_idx(myDF, "Oklahoma")
+            , getAIO_end_idx(myDF, "Oklahoma")
+            ) %>%
+  pack_rows("Texas"
+            , getAIO_start_idx(myDF, "Texas")
+            , getAIO_end_idx(myDF, "Texas")
+            ) %>%
+  scroll_box(height = "400px")
+
+```
+\  
+\  
+
+```{r, cache=TRUE, echo = FALSE, warning=FALSE, message=FALSE, fig.align='center', fig.width=10, fig.height=8}
+  plotRegions(myDF, "Y", "COVID-19 Cases - South Region", "Y")
+  plotRegions(myDF %>%
+                group_by(Name) %>%
+                slice(tail(row_number(), 14)), "Y", "COVID-19 Cases - South Region (Last 14 Days)", "Y", "comp")
+  showTracking(South, "South")
+
+```
+
+#### West
+```{r, echo = FALSE}
+myDF <- data %>%
+            filter(Name %in% c(West)) %>%
+            group_by(Region, Name) %>%
+            arrange(Region, Name, Last_Update) %>%
+            slice(c(1:n()-1)) %>%
+            ungroup() %>%
+            select(Name, Last_Update, Confirmed, delta_confirmed) %>%
+            arrange(Name, Last_Update) %>%
+            rename(Date=Last_Update, Change=delta_confirmed)
+
+myDF$row_num <- seq.int(nrow(myDF))  
+
+kable(myDF %>% select(Date, Confirmed, Change)
+      , caption = "Confirmed Cases Trend For West Region") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F) %>%
+  pack_rows("Arizona"
+            , getAIO_start_idx(myDF, "Arizona")
+            , getAIO_end_idx(myDF, "Arizona")
+            ) %>%
+  pack_rows("Colorado"
+            , getAIO_start_idx(myDF, "Colorado")
+            , getAIO_end_idx(myDF, "Colorado")
+            ) %>%
+  pack_rows("Idaho"
+            , getAIO_start_idx(myDF, "Idaho")
+            , getAIO_end_idx(myDF, "Idaho")
+            ) %>%
+  pack_rows("Montana"
+            , getAIO_start_idx(myDF, "Montana")
+            , getAIO_end_idx(myDF, "Montana")
+            ) %>%
+  pack_rows("Nevada"
+            , getAIO_start_idx(myDF, "Nevada")
+            , getAIO_end_idx(myDF, "Nevada")
+            ) %>%
+  pack_rows("New Mexico"
+            , getAIO_start_idx(myDF, "New Mexico")
+            , getAIO_end_idx(myDF, "New Mexico")
+            ) %>%
+  pack_rows("Utah"
+            , getAIO_start_idx(myDF, "Utah")
+            , getAIO_end_idx(myDF, "Utah")
+            ) %>%
+  pack_rows("Wyoming"
+            , getAIO_start_idx(myDF, "Wyoming")
+            , getAIO_end_idx(myDF, "Wyoming")
+            ) %>%
+  pack_rows("Alaska"
+            , getAIO_start_idx(myDF, "Alaska")
+            , getAIO_end_idx(myDF, "Alaska")
+            ) %>%
+  pack_rows("California"
+            , getAIO_start_idx(myDF, "California")
+            , getAIO_end_idx(myDF, "California")
+            ) %>%
+  pack_rows("Hawaii"
+            , getAIO_start_idx(myDF, "Hawaii")
+            , getAIO_end_idx(myDF, "Hawaii")
+            ) %>%
+  pack_rows("Oregon"
+            , getAIO_start_idx(myDF, "Oregon")
+            , getAIO_end_idx(myDF, "Oregon")
+            ) %>%
+  pack_rows("Washington"
+            , getAIO_start_idx(myDF, "Washington")
+            , getAIO_end_idx(myDF, "Washington")
+            ) %>%
+  pack_rows("Guam"
+            , getAIO_start_idx(myDF, "Guam")
+            , getAIO_end_idx(myDF, "Guam")
+            ) %>%
+  scroll_box(height = "400px")
+
+```
+\  
+\  
+
+```{r, cache=TRUE, echo = FALSE, warning=FALSE, message=FALSE, fig.align='center', fig.width=10, fig.height=8}
+  plotRegions(myDF, "Y", "COVID-19 Cases - West Region", "Y")
+  plotRegions(myDF %>%
+                group_by(Name) %>%
+                slice(tail(row_number(), 14)), "Y", "COVID-19 Cases - West Region (Last 14 Days)", "Y", "comp")
+  showTracking(West, "West")
+
+```
+
+***
+
+\  
+\  
+
+```
+Every attempt was made to convey valid and accurate results based upon the data provided.
+
+Stay well and be safe.
+
+```
+
+\ 
+\  
+\ 
+
+###### Report generated:  `r Sys.time()`
